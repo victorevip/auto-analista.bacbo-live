@@ -4,10 +4,15 @@ import TelegramBot from "node-telegram-bot-api";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// === TELEGRAM ===
-const TOKEN = process.env.BOT_TOKEN;
+// === TELEGRAM TOKEN (aceita vários nomes) ===
+const TOKEN =
+  process.env.BOT_TOKEN ||
+  process.env.TELEGRAM_TOKEN ||
+  process.env.AUTO_BACBO_TOKEN;
+
 if (!TOKEN) {
-  console.error("❌ BOT_TOKEN não definido");
+  console.error("❌ Nenhum token do Telegram definido");
+  console.error("Use BOT_TOKEN, TELEGRAM_TOKEN ou AUTO_BACBO_TOKEN");
   process.exit(1);
 }
 
