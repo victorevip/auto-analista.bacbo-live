@@ -1,6 +1,5 @@
 import express from "express";
 import TelegramBot from "node-telegram-bot-api";
-import mercadopago from "mercadopago";
 import { db } from "./database.js";
 
 console.log("🚀 Iniciando aplicação...");
@@ -10,7 +9,6 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// === TELEGRAM TOKEN ===
 const TOKEN =
   process.env.BOT_TOKEN ||
   process.env.TELEGRAM_TOKEN ||
@@ -21,14 +19,13 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 // ===== ESTADO =====
 const emAnalise = {};
 const historico = {};
-const aguardandoResultado = {}; // 👈 NOVO
-const aguardandoTipoWin = {};   // 👈 NOVO
+const aguardandoResultado = {};
+const aguardandoTipoWin = {};
 
 // ===== FUNÇÕES =====
 function hoje() {
@@ -70,6 +67,20 @@ function consumirEntrada(user) {
     "UPDATE users SET entradas_hoje = entradas_hoje + 1 WHERE telegram_id=?",
     [user.telegram_id]
   );
+}
+
+// ===== MENU PADRÃO =====
+function enviarMenu(chatId) {
+  bot.sendMessage(chatId, "📌 *Menu principal*", {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "▶️ Nova Análise", callback_data: "MENU_ANALISAR" }],
+        [{ text: "📊 Status", callback_data: "MENU_STATUS" }],
+        [{ text: "💳 Planos", callback_data: "MENU_PIX" }],
+      ],
+    },
+  });
 }
 
 // ===== EMOJI =====
@@ -116,11 +127,7 @@ bot.onText(/\/start/, (msg) => {
   emAnalise[msg.from.id] = false;
   historico[msg.from.id] = [];
 
-  bot.sendMessage(
-    msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n▶️ Use /analisar para iniciar",
-    { parse_mode: "Markdown" }
-  );
+  enviarMenu(msg.chat.id);
 });
 
 // ===== ANALISAR =====
@@ -136,17 +143,13 @@ bot.onText(/\/analisar/, (msg) => {
     emAnalise[msg.from.id] = true;
     historico[msg.from.id] = [];
 
-    bot.sendMessage(
-      msg.chat.id,
-      "📥 Envie os resultados:\n🔵 🔴 🟠"
-    );
+    bot.sendMessage(msg.chat.id, "📥 Envie os resultados:\n🔵 🔴 🟠");
   });
 });
 
 // ===== RECEBE EMOJIS =====
 bot.on("message", (msg) => {
   if (!msg.text || msg.text.startsWith("/")) return;
-
   const id = msg.from.id;
   if (!emAnalise[id]) return;
 
@@ -168,9 +171,7 @@ bot.on("message", (msg) => {
 
       return bot.sendMessage(
         msg.chat.id,
-        `🚨 *OPORTUNIDADE DETECTADA* 🚨\n\n📊 Histórico:\n${historico[id].join(
-          " "
-        )}\n\n🎯 *ENTRADA CONFIRMADA:*\n${sinal}\n\n⏱ FAZER ATÉ G1`,
+        `🚨 *OPORTUNIDADE DETECTADA*\n\n🎯 ${sinal}`,
         {
           parse_mode: "Markdown",
           reply_markup: {
@@ -190,51 +191,51 @@ bot.on("message", (msg) => {
 // ===== CALLBACKS =====
 bot.on("callback_query", (q) => {
   const id = q.from.id;
+  const chatId = q.message.chat.id;
 
   if (q.data === "WIN" && aguardandoResultado[id]) {
     aguardandoResultado[id] = false;
     aguardandoTipoWin[id] = true;
 
-    return bot.editMessageText(
-      "Confirme o resultado:",
-      {
-        chat_id: q.message.chat.id,
-        message_id: q.message.message_id,
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "🟢 WIN SEM GALE", callback_data: "WIN_SG" },
-              { text: "🟢 WIN NO GALE 1", callback_data: "WIN_G1" },
-            ],
+    return bot.editMessageText("Confirme o resultado:", {
+      chat_id: chatId,
+      message_id: q.message.message_id,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🟢 WIN SEM GALE", callback_data: "WIN_SG" },
+            { text: "🟢 WIN NO GALE 1", callback_data: "WIN_G1" },
           ],
-        },
-      }
-    );
+        ],
+      },
+    });
   }
 
   if (q.data === "LOSS" && aguardandoResultado[id]) {
     aguardandoResultado[id] = false;
-    return bot.editMessageText("❌ LOSS registrado.", {
-      chat_id: q.message.chat.id,
+    bot.editMessageText("❌ LOSS registrado.", {
+      chat_id: chatId,
       message_id: q.message.message_id,
     });
+    return enviarMenu(chatId);
   }
 
   if ((q.data === "WIN_SG" || q.data === "WIN_G1") && aguardandoTipoWin[id]) {
     aguardandoTipoWin[id] = false;
-    return bot.editMessageText(
-      q.data === "WIN_SG"
-        ? "🟢 WIN SEM GALE registrado!"
-        : "🟢 WIN NO GALE 1 registrado!",
-      {
-        chat_id: q.message.chat.id,
-        message_id: q.message.message_id,
-      }
-    );
+    bot.editMessageText("🟢 WIN registrado com sucesso!", {
+      chat_id: chatId,
+      message_id: q.message.message_id,
+    });
+    return enviarMenu(chatId);
   }
+
+  if (q.data === "MENU_ANALISAR") return bot.sendMessage(chatId, "/analisar");
+  if (q.data === "MENU_STATUS") return bot.sendMessage(chatId, "/status");
+  if (q.data === "MENU_PIX")
+    return bot.sendMessage(chatId, "/pix 30\n/pix 90\n/pix 365");
 });
 
-// === EXPRESS ===
+// === EXPRESS =====
 app.get("/", (_, res) => res.send("🚀 Bot rodando"));
 
 app.listen(PORT, () =>
