@@ -21,6 +21,9 @@ if (!TOKEN) {
 // === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
 
+// === ADMIN ===
+const ADMIN_ID = 8429920060;
+
 // ===== FUNÇÕES =====
 function hoje() {
   return Math.floor(Date.now() / 86400000);
@@ -45,7 +48,7 @@ function criarUsuarioDemo(telegramId) {
   );
 }
 
-/* 🔁 FUNÇÃO SUBSTITUÍDA */
+/* 🔁 FUNÇÃO FINAL */
 function podeUsarBot(user) {
   if (!user) return false;
 
@@ -80,7 +83,7 @@ function registrarEntrada(user) {
   );
 }
 
-// ===== COMANDOS =====
+// ===== COMANDOS LIBERADOS =====
 bot.onText(/\/start/, (msg) => {
   criarUsuarioDemo(msg.from.id);
 
@@ -91,7 +94,7 @@ bot.onText(/\/start/, (msg) => {
   );
 });
 
-/* 🧾 STATUS DO USUÁRIO */
+/* 🧾 STATUS */
 bot.onText(/\/status/, (msg) => {
   getUser(msg.from.id, (user) => {
     if (!user) return bot.sendMessage(msg.chat.id, "Use /start primeiro.");
@@ -110,9 +113,7 @@ bot.onText(/\/status/, (msg) => {
   });
 });
 
-/* 🔐 COMANDO ADMIN */
-const ADMIN_ID = 8429920060;
-
+/* 🔐 ADMIN - ATIVAR PLANO */
 bot.onText(/\/ativar (\d+) (\d+)/, (msg, match) => {
   if (msg.from.id !== ADMIN_ID) {
     return bot.sendMessage(msg.chat.id, "⛔ Acesso negado");
@@ -133,31 +134,41 @@ bot.onText(/\/ativar (\d+) (\d+)/, (msg, match) => {
 
   bot.sendMessage(
     msg.chat.id,
-    `✅ Plano PAGO ativado para ${telegramId}\n⏳ Duração: ${dias} dias`
+    `✅ Plano PAGO ativado\n👤 Usuário: ${telegramId}\n⏳ ${dias} dias`
   );
 });
 
-// ===== MENSAGEM NORMAL =====
+// ===== BLOQUEIO TOTAL (mensagens + comandos) =====
 bot.on("message", (msg) => {
-  if (!msg.text || msg.text.startsWith("/")) return;
+  if (!msg.text) return;
 
-  getUser(msg.from.id, (user) => {
+  const chatId = msg.chat.id;
+  const telegramId = msg.from.id;
+
+  // libera admin
+  if (telegramId === ADMIN_ID) return;
+
+  // libera /start e /status
+  if (msg.text.startsWith("/start") || msg.text.startsWith("/status")) return;
+
+  getUser(telegramId, (user) => {
     if (!user) {
-      criarUsuarioDemo(msg.from.id);
-      return bot.sendMessage(msg.chat.id, "Use /start para iniciar.");
+      criarUsuarioDemo(telegramId);
+      return bot.sendMessage(chatId, "Use /start para iniciar.");
     }
 
     if (!podeUsarBot(user)) {
       return bot.sendMessage(
-        msg.chat.id,
-        "⛔ Limite do plano atingido.\n🔓 Adquira o plano pago."
+        chatId,
+        "⛔ *Acesso bloqueado*\n\n📌 Plano DEMO: 1 entrada/dia\n🔓 Adquira o plano pago.",
+        { parse_mode: "Markdown" }
       );
     }
 
     registrarEntrada(user);
 
     bot.sendMessage(
-      msg.chat.id,
+      chatId,
       "📊 *Análise enviada com sucesso!*",
       { parse_mode: "Markdown" }
     );
