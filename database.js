@@ -1,8 +1,10 @@
 import sqlite3 from "sqlite3";
 
+console.log("🗄️ Conectando ao SQLite...");
+
 export const db = new sqlite3.Database("./db.sqlite", (err) => {
   if (err) {
-    console.error("❌ Erro ao abrir banco:", err.message);
+    console.error("❌ Erro ao conectar no banco", err);
   } else {
     console.log("✅ Banco SQLite conectado");
   }
@@ -19,11 +21,7 @@ db.serialize(() => {
       ultimo_dia INTEGER DEFAULT 0,
       criado_em INTEGER
     )
-  `, (err) => {
-    if (err) {
-      console.error("❌ Erro ao criar tabela:", err.message);
-    } else {
-      console.log("✅ Tabela users pronta");
-    }
+  `, () => {
+    console.log("✅ Tabela users pronta");
   });
 });
