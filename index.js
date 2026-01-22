@@ -120,8 +120,12 @@ bot.onText(/\/status/, (msg) => {
   });
 });
 
-// ===== MENSAGEM NORMAL =====
+// ===== MENSAGEM NORMAL (CORRIGIDA) =====
 bot.on("message", (msg) => {
+  // ignora mensagens sem texto (sticker, áudio, etc)
+  if (!msg.text) return;
+
+  // ignora comandos
   if (msg.text.startsWith("/")) return;
 
   const chatId = msg.chat.id;
@@ -130,21 +134,27 @@ bot.on("message", (msg) => {
   getUser(telegramId, (user) => {
     if (!user) {
       criarUsuarioDemo(telegramId);
-      return bot.sendMessage(chatId, "👋 Use /start para começar.");
+      return bot.sendMessage(
+        chatId,
+        "👋 Bem-vindo!\nUse /start para iniciar o bot."
+      );
     }
 
     if (!podeUsarBot(user)) {
       return bot.sendMessage(
         chatId,
-        "⛔ Limite diário do plano DEMO atingido.\n🔓 Adquira o plano pago."
+        "⛔ *Limite diário atingido*\n\n📌 Plano DEMO permite 1 entrada por dia.\n🔓 Adquira o plano pago.",
+        { parse_mode: "Markdown" }
       );
     }
 
     registrarEntrada(user);
 
-    bot.sendMessage(chatId, "📊 *Análise enviada com sucesso!*", {
-      parse_mode: "Markdown",
-    });
+    bot.sendMessage(
+      chatId,
+      "📊 *Análise enviada com sucesso!*",
+      { parse_mode: "Markdown" }
+    );
   });
 });
 
