@@ -61,7 +61,9 @@ function criarUsuarioDemo(id) {
 function podeUsarBot(user) {
   if (!user) return false;
 
-  if (user.plano === "pago") return Date.now() < user.expira_em;
+  if (user.plano === "pago") {
+    return Date.now() < user.expira_em;
+  }
 
   const dia = hoje();
   if (user.ultimo_dia !== dia) {
@@ -117,7 +119,9 @@ function analisarPOUP(H) {
     else break;
   }
 
-  if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
+  if (streak >= 3) {
+    return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
+  }
 
   if (pP > 0.6) return "🔵 AZUL";
   if (pB > 0.6) return "🔴 VERMELHO";
@@ -133,7 +137,7 @@ bot.onText(/\/start/, (msg) => {
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 teste por dia\n\n▶️ Use /analisar para iniciar\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
+    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 teste grátis por dia\n\n▶️ Use /analisar para iniciar\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
     { parse_mode: "Markdown" }
   );
 });
@@ -144,7 +148,7 @@ bot.onText(/\/analisar/, (msg) => {
     if (!user || !podeUsarBot(user)) {
       return bot.sendMessage(
         msg.chat.id,
-        "⛔ Teste esgotado.\n\n💳 Adquira um plano:\n/pix 30\n/pix 90\n/pix 365",
+        "⛔ *Teste grátis esgotado*\n\n💳 Adquira um plano:\n/pix 30\n/pix 90\n/pix 365",
         { parse_mode: "Markdown" }
       );
     }
@@ -160,7 +164,7 @@ bot.onText(/\/analisar/, (msg) => {
   });
 });
 
-// ===== RECEBE EMOJIS =====
+// ===== RECEBE EMOJIS (ALTERAÇÃO AQUI) =====
 bot.on("message", (msg) => {
   if (!msg.text) return;
   if (msg.text.startsWith("/")) return;
@@ -168,31 +172,53 @@ bot.on("message", (msg) => {
   const id = msg.from.id;
   if (!emAnalise[id]) return;
 
-  const letra = emojiParaLetra(msg.text.trim());
-  if (!letra) return;
+  // 🔥 aceita emojis enviados na horizontal
+  const letras = msg.text
+    .trim()
+    .split(/\s+/)
+    .map(emojiParaLetra)
+    .filter(Boolean);
 
-  historico[id].push(letra);
-  if (historico[id].length > 20) historico[id].shift();
+  if (letras.length === 0) return;
 
-  const sinal = analisarPOUP(historico[id]);
+  for (const letra of letras) {
+    historico[id].push(letra);
+    if (historico[id].length > 20) historico[id].shift();
 
-  if (!sinal) {
-    return bot.sendMessage(
-      msg.chat.id,
-      `📊 Histórico: ${historico[id].join(" ")}\n⏳ Aguardando dados...`
-    );
-  }
+    const sinal = analisarPOUP(historico[id]);
 
-  if (sinal !== "NO_BET") {
+    if (!sinal) {
+      bot.sendMessage(
+        msg.chat.id,
+        `📊 Histórico:\n${historico[id].join(" ")}\n\n⏳ Aguardando dados suficientes...`
+      );
+      continue;
+    }
+
+    if (sinal === "NO_BET") {
+      bot.sendMessage(
+        msg.chat.id,
+        `📊 Histórico:\n${historico[id].join(
+          " "
+        )}\n\n⚪ NO BET — aguardando oportunidade...`
+      );
+      continue;
+    }
+
+    // 🚨 OPORTUNIDADE REAL → CONSOME TESTE
     getUser(id, (user) => consumirEntrada(user));
     emAnalise[id] = false;
-  }
 
-  bot.sendMessage(
-    msg.chat.id,
-    `📊 Histórico: ${historico[id].join(" ")}\n\n🎯 *SINAL*\n${sinal}`,
-    { parse_mode: "Markdown" }
-  );
+    bot.sendMessage(
+      msg.chat.id,
+      `🚨 *OPORTUNIDADE DETECTADA* 🚨\n\n📊 Histórico:\n${historico[id].join(
+        " "
+      )}\n\n🎯 *ENTRADA CONFIRMADA:*\n${sinal}\n\n⏰ Aja na próxima rodada!`,
+      { parse_mode: "Markdown" }
+    );
+
+    break; // para após encontrar oportunidade
+  }
 });
 
 // === EXPRESS ===
