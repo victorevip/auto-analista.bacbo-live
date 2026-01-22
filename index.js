@@ -34,11 +34,12 @@ mercadopago.configure({
 // === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// ===== FUNÇÕES =====
+// ===== UTIL =====
 function hoje() {
   return Math.floor(Date.now() / 86400000);
 }
 
+// ===== BANCO =====
 function getUser(telegramId, callback) {
   db.get(
     "SELECT * FROM users WHERE telegram_id = ?",
@@ -51,8 +52,8 @@ function criarUsuarioDemo(telegramId) {
   db.run(
     `
     INSERT OR IGNORE INTO users 
-    (telegram_id, plano, criado_em, ultimo_dia)
-    VALUES (?, 'demo', ?, ?)
+    (telegram_id, plano, criado_em, ultimo_dia, entradas_hoje)
+    VALUES (?, 'demo', ?, ?, 0)
     `,
     [telegramId, Date.now(), hoje()]
   );
@@ -89,18 +90,65 @@ function registrarEntrada(user) {
   );
 }
 
+// ===== ESTRATÉGIA POUP =====
+const historico = {}; // por usuário
+
+function emojiParaLetra(t) {
+  if (t === "🔵") return "P";
+  if (t === "🔴") return "B";
+  if (t === "🟠") return "E";
+  return null;
+}
+
+function analisarPOUP(H) {
+  if (H.length < 10) {
+    return `📊 Dados insuficientes (${H.length}/10)`;
+  }
+
+  const w = H.slice(-10);
+  let score = { P: 0, B: 0, E: 0 };
+  let peso = 1;
+
+  for (let i = w.length - 1; i >= 0; i--) {
+    score[w[i]] += peso;
+    peso += 0.2;
+  }
+
+  const total = score.P + score.B + score.E;
+  const pP = score.P / total;
+  const pB = score.B / total;
+  const pE = score.E / total;
+
+  if (pE > 0.2) return "🟠 NO BET (empate alto)";
+
+  const last = w[w.length - 1];
+  let streak = 1;
+  for (let i = w.length - 2; i >= 0; i--) {
+    if (w[i] === last) streak++;
+    else break;
+  }
+
+  if (streak >= 3) {
+    return `🔥 Quebra de streak → ${last === "P" ? "🔴 VERMELHO" : "🔵 AZUL"}`;
+  }
+
+  if (pP > 0.6) return `🔵 AZUL (${(pP * 100).toFixed(1)}%)`;
+  if (pB > 0.6) return `🔴 VERMELHO (${(pB * 100).toFixed(1)}%)`;
+
+  return "⚪ NO BET";
+}
+
 // ===== COMANDOS =====
 bot.onText(/\/start/, (msg) => {
   criarUsuarioDemo(msg.from.id);
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia\n\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
+    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia\n\n📥 *CATALOGAÇÃO MANUAL*\nEnvie:\n🔵 Azul\n🔴 Vermelho\n🟠 Empate\n\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
     { parse_mode: "Markdown" }
   );
 });
 
-// 🧾 STATUS
 bot.onText(/\/status/, (msg) => {
   getUser(msg.from.id, (user) => {
     if (!user) return bot.sendMessage(msg.chat.id, "Use /start primeiro.");
@@ -119,10 +167,10 @@ bot.onText(/\/status/, (msg) => {
   });
 });
 
-// 💸 PIX COM PLANOS (30 / 90 / 365)
+// ===== PIX COM PLANOS =====
 bot.onText(/\/pix (30|90|365)/, async (msg, match) => {
-  const chatId = msg.chat.id;
   const telegramId = msg.from.id;
+  const chatId = msg.chat.id;
   const dias = parseInt(match[1]);
 
   const precos = {
@@ -134,7 +182,7 @@ bot.onText(/\/pix (30|90|365)/, async (msg, match) => {
   try {
     const pagamento = await mercadopago.payment.create({
       transaction_amount: precos[dias],
-      description: `Plano PAGO - ${dias} dias`,
+      description: `Plano Auto Analista Bac Bo - ${dias} dias`,
       payment_method_id: "pix",
       payer: {
         email: `user${telegramId}@bot.com`,
@@ -150,16 +198,16 @@ bot.onText(/\/pix (30|90|365)/, async (msg, match) => {
 
     bot.sendMessage(
       chatId,
-      `💸 *Pagamento PIX*\n\n📦 Plano: ${dias} dias\n💰 Valor: R$${precos[dias]}\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\n✅ Liberação automática após o pagamento.`,
+      `💸 *Pagamento PIX*\n\n📦 Plano: ${dias} dias\n💰 Valor: R$${precos[dias]}\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\n✅ Liberação automática após pagamento.`,
       { parse_mode: "Markdown" }
     );
-  } catch (err) {
-    console.error(err);
+  } catch (e) {
+    console.error(e);
     bot.sendMessage(chatId, "❌ Erro ao gerar PIX.");
   }
 });
 
-// ===== WEBHOOK MERCADO PAGO (CORRIGIDO) =====
+// ===== WEBHOOK MERCADO PAGO =====
 app.post("/webhook", async (req, res) => {
   try {
     const paymentId = req.body?.data?.id;
@@ -173,17 +221,13 @@ app.post("/webhook", async (req, res) => {
 
       getUser(telegramId, (user) => {
         if (user && user.plano === "pago" && user.expira_em > Date.now()) {
-          return; // já ativo → ignora duplicação
+          return;
         }
 
         const expira = Date.now() + dias * 86400000;
 
         db.run(
-          `
-          UPDATE users 
-          SET plano = 'pago', expira_em = ?
-          WHERE telegram_id = ?
-          `,
+          `UPDATE users SET plano='pago', expira_em=? WHERE telegram_id=?`,
           [expira, telegramId]
         );
 
@@ -197,45 +241,52 @@ app.post("/webhook", async (req, res) => {
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("Erro no webhook:", err);
+    console.error("Webhook erro:", err);
     res.sendStatus(500);
   }
 });
 
-// ===== BLOQUEIO =====
+// ===== CATALOGAÇÃO =====
 bot.on("message", (msg) => {
   if (!msg.text) return;
 
-  const chatId = msg.chat.id;
   const telegramId = msg.from.id;
+  const chatId = msg.chat.id;
 
   if (
     msg.text.startsWith("/start") ||
     msg.text.startsWith("/status") ||
     msg.text.startsWith("/pix")
-  ) {
-    return;
-  }
+  ) return;
+
+  const letra = emojiParaLetra(msg.text.trim());
+  if (!letra) return;
 
   getUser(telegramId, (user) => {
-    if (!user) {
-      criarUsuarioDemo(telegramId);
-      return bot.sendMessage(chatId, "Use /start para iniciar.");
-    }
+    if (!user) return;
 
     if (!podeUsarBot(user)) {
       return bot.sendMessage(
         chatId,
-        "⛔ *Acesso bloqueado*\n\n💳 Planos disponíveis:\n/pix 30\n/pix 90\n/pix 365",
+        "⛔ *Acesso bloqueado*\n\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
         { parse_mode: "Markdown" }
       );
     }
 
+    if (!historico[telegramId]) historico[telegramId] = [];
+    historico[telegramId].push(letra);
+    if (historico[telegramId].length > 20)
+      historico[telegramId].shift();
+
     registrarEntrada(user);
 
-    bot.sendMessage(chatId, "📊 *Análise enviada!*", {
-      parse_mode: "Markdown",
-    });
+    const sinal = analisarPOUP(historico[telegramId]);
+
+    bot.sendMessage(
+      chatId,
+      `📥 Histórico:\n${historico[telegramId].join(" ")}\n\n🎯 *SINAL*\n${sinal}`,
+      { parse_mode: "Markdown" }
+    );
   });
 });
 
