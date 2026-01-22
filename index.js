@@ -1,5 +1,6 @@
 import express from "express";
 import TelegramBot from "node-telegram-bot-api";
+import mercadopago from "mercadopago";
 import { db } from "./database.js";
 
 console.log("🚀 Iniciando aplicação...");
@@ -17,6 +18,16 @@ if (!TOKEN) {
   console.error("❌ Nenhum token do Telegram definido");
   process.exit(1);
 }
+
+// === MERCADO PAGO ===
+if (!process.env.MP_ACCESS_TOKEN) {
+  console.error("❌ MP_ACCESS_TOKEN não definido");
+  process.exit(1);
+}
+
+mercadopago.configure({
+  access_token: process.env.MP_ACCESS_TOKEN,
+});
 
 // === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
@@ -48,17 +59,14 @@ function criarUsuarioDemo(telegramId) {
   );
 }
 
-// 🔁 FUNÇÃO FINAL
 function podeUsarBot(user) {
   if (!user) return false;
 
-  // PLANO PAGO
   if (user.plano === "pago") {
     if (!user.expira_em) return true;
     return Date.now() < user.expira_em;
   }
 
-  // PLANO DEMO (1 entrada/dia)
   if (user.plano === "demo") {
     const diaAtual = hoje();
 
@@ -83,13 +91,13 @@ function registrarEntrada(user) {
   );
 }
 
-// ===== COMANDOS LIBERADOS =====
+// ===== COMANDOS =====
 bot.onText(/\/start/, (msg) => {
   criarUsuarioDemo(msg.from.id);
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia",
+    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia\n\n💳 Para plano pago use /pix",
     { parse_mode: "Markdown" }
   );
 });
@@ -113,7 +121,38 @@ bot.onText(/\/status/, (msg) => {
   });
 });
 
-// 🔐 ADMIN - ATIVAR PLANO PAGO
+// 💸 PIX — GERAR PAGAMENTO
+bot.onText(/\/pix/, async (msg) => {
+  const chatId = msg.chat.id;
+  const telegramId = msg.from.id;
+
+  try {
+    const pagamento = await mercadopago.payment.create({
+      transaction_amount: 29.9,
+      description: "Plano PAGO - Auto Analista Bac Bo (30 dias)",
+      payment_method_id: "pix",
+      payer: {
+        email: `user${telegramId}@bot.com`,
+      },
+    });
+
+    const qr =
+      pagamento.body.point_of_interaction.transaction_data.qr_code;
+    const copiaCola =
+      pagamento.body.point_of_interaction.transaction_data.qr_code_base64;
+
+    bot.sendMessage(
+      chatId,
+      `💸 *Pagamento PIX*\n\n📌 Valor: R$29,90\n⏳ Plano de 30 dias\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\nApós o pagamento, o acesso será liberado.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error(err);
+    bot.sendMessage(chatId, "❌ Erro ao gerar PIX. Tente novamente.");
+  }
+});
+
+// 🔐 ADMIN - ATIVAR PLANO
 bot.onText(/\/ativar (\d+) (\d+)/, (msg, match) => {
   if (msg.from.id !== ADMIN_ID) {
     return bot.sendMessage(msg.chat.id, "⛔ Acesso negado");
@@ -138,20 +177,19 @@ bot.onText(/\/ativar (\d+) (\d+)/, (msg, match) => {
   );
 });
 
-// ===== BLOQUEIO TOTAL (mensagens + comandos) =====
+// ===== BLOQUEIO TOTAL =====
 bot.on("message", (msg) => {
   if (!msg.text) return;
 
   const chatId = msg.chat.id;
   const telegramId = msg.from.id;
 
-  // libera admin
   if (telegramId === ADMIN_ID) return;
 
-  // libera comandos permitidos
   if (
     msg.text.startsWith("/start") ||
-    msg.text.startsWith("/status")
+    msg.text.startsWith("/status") ||
+    msg.text.startsWith("/pix")
   ) {
     return;
   }
@@ -165,7 +203,7 @@ bot.on("message", (msg) => {
     if (!podeUsarBot(user)) {
       return bot.sendMessage(
         chatId,
-        "⛔ *Acesso bloqueado*\n\n📌 Plano DEMO: 1 entrada por dia\n🔓 Adquira o plano pago.",
+        "⛔ *Acesso bloqueado*\n\n📌 Plano DEMO: 1 entrada/dia\n💳 Use /pix para liberar acesso",
         { parse_mode: "Markdown" }
       );
     }
