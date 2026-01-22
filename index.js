@@ -88,6 +88,44 @@ function consumirEntrada(user) {
   );
 }
 
+// ===== EMOJI =====
+function emojiParaLetra(e) {
+  if (e === "🔵") return "P";
+  if (e === "🔴") return "B";
+  if (e === "🟠") return "E";
+  return null;
+}
+
+// ===== ESTRATÉGIA =====
+function analisarPOUP(H) {
+  if (H.length < 10) return null;
+
+  const w = H.slice(-10);
+  let score = { P: 0, B: 0, E: 0 };
+  let peso = 1;
+
+  for (let i = w.length - 1; i >= 0; i--) {
+    score[w[i]] += peso;
+    peso += 0.2;
+  }
+
+  const total = score.P + score.B + score.E;
+  if (score.E / total > 0.2) return "NO_BET";
+
+  let last = w[w.length - 1];
+  let streak = 1;
+  for (let i = w.length - 2; i >= 0; i--) {
+    if (w[i] === last) streak++;
+    else break;
+  }
+
+  if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
+  if (score.P / total > 0.6) return "🔵 AZUL";
+  if (score.B / total > 0.6) return "🔴 VERMELHO";
+
+  return "NO_BET";
+}
+
 // ===== START =====
 bot.onText(/\/start/, (msg) => {
   criarUsuarioDemo(msg.from.id);
@@ -142,14 +180,46 @@ bot.onText(/\/analisar/, (msg) => {
   });
 });
 
+// ===== RECEBE RESULTADOS =====
+bot.on("message", (msg) => {
+  if (!msg.text || msg.text.startsWith("/")) return;
+
+  const id = msg.from.id;
+  if (!emAnalise[id]) return;
+
+  const letra = emojiParaLetra(msg.text.trim());
+  if (!letra) return;
+
+  historico[id].push(letra);
+  if (historico[id].length > 20) historico[id].shift();
+
+  const sinal = analisarPOUP(historico[id]);
+
+  if (!sinal || sinal === "NO_BET") {
+    return bot.sendMessage(
+      msg.chat.id,
+      `📊 Histórico:\n${historico[id].join(" ")}\n\n⏳ Aguardando oportunidade...`
+    );
+  }
+
+  // 🚨 OPORTUNIDADE REAL → CONSOME ENTRADA
+  getUser(id, (user) => consumirEntrada(user));
+  emAnalise[id] = false;
+
+  bot.sendMessage(
+    msg.chat.id,
+    `🚨 *OPORTUNIDADE DETECTADA* 🚨\n\n📊 Histórico:\n${historico[id].join(
+      " "
+    )}\n\n🎯 *ENTRADA CONFIRMADA:*\n${sinal}`,
+    { parse_mode: "Markdown" }
+  );
+});
+
 // ===== PIX (PLANO ÚNICO) =====
 bot.onText(/\/pix$/, async (msg) => {
-  const VALOR = 59.9;
-  const DIAS = 30;
-
   try {
     const pagamento = await mercadopago.payment.create({
-      transaction_amount: VALOR,
+      transaction_amount: 59.9,
       description: "Plano Mensal - 30 dias",
       payment_method_id: "pix",
       payer: { email: `user${msg.from.id}@bot.com` },
