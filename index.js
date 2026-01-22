@@ -13,14 +13,10 @@ const TOKEN =
   process.env.TELEGRAM_TOKEN ||
   process.env.AUTO_BACBO_TOKEN;
 
-console.log("🔑 TOKEN existe?", !!TOKEN);
-
 if (!TOKEN) {
   console.error("❌ Nenhum token do Telegram definido");
   process.exit(1);
 }
-
-console.log("✅ Token carregado");
 
 // === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
@@ -49,9 +45,17 @@ function criarUsuarioDemo(telegramId) {
   );
 }
 
+/* 🔁 FUNÇÃO SUBSTITUÍDA */
 function podeUsarBot(user) {
-  if (user.plano === "pago") return true;
+  if (!user) return false;
 
+  // PLANO PAGO
+  if (user.plano === "pago") {
+    if (!user.expira_em) return true;
+    return Date.now() < user.expira_em;
+  }
+
+  // PLANO DEMO (1 entrada/dia)
   if (user.plano === "demo") {
     const diaAtual = hoje();
 
@@ -78,89 +82,89 @@ function registrarEntrada(user) {
 
 // ===== COMANDOS =====
 bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const telegramId = msg.from.id;
-
-  criarUsuarioDemo(telegramId);
+  criarUsuarioDemo(msg.from.id);
 
   bot.sendMessage(
-    chatId,
+    msg.chat.id,
     "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia",
     { parse_mode: "Markdown" }
   );
 });
 
-bot.onText(/\/plano/, (msg) => {
-  const chatId = msg.chat.id;
-  const telegramId = msg.from.id;
-
-  getUser(telegramId, (user) => {
-    if (!user) return bot.sendMessage(chatId, "Use /start primeiro.");
-
-    bot.sendMessage(
-      chatId,
-      `📦 *Seu plano:* ${user.plano.toUpperCase()}\n📊 Entradas hoje: ${user.entradas_hoje}`,
-      { parse_mode: "Markdown" }
-    );
-  });
-});
-
+/* 🧾 STATUS DO USUÁRIO */
 bot.onText(/\/status/, (msg) => {
-  const chatId = msg.chat.id;
-  const telegramId = msg.from.id;
+  getUser(msg.from.id, (user) => {
+    if (!user) return bot.sendMessage(msg.chat.id, "Use /start primeiro.");
 
-  getUser(telegramId, (user) => {
-    if (!user) return bot.sendMessage(chatId, "Usuário não encontrado.");
+    let texto = `🧾 *STATUS*\nPlano: ${user.plano.toUpperCase()}`;
 
-    bot.sendMessage(
-      chatId,
-      `🧾 *STATUS*\nPlano: ${user.plano}\nEntradas hoje: ${user.entradas_hoje}`,
-      { parse_mode: "Markdown" }
-    );
+    if (user.plano === "demo") {
+      texto += `\nEntradas hoje: ${user.entradas_hoje}/1`;
+    }
+
+    if (user.plano === "pago" && user.expira_em) {
+      texto += `\nExpira em: ${new Date(user.expira_em).toLocaleDateString()}`;
+    }
+
+    bot.sendMessage(msg.chat.id, texto, { parse_mode: "Markdown" });
   });
 });
 
-// ===== MENSAGEM NORMAL (CORRIGIDA) =====
+/* 🔐 COMANDO ADMIN */
+const ADMIN_ID = 8429920060;
+
+bot.onText(/\/ativar (\d+) (\d+)/, (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) {
+    return bot.sendMessage(msg.chat.id, "⛔ Acesso negado");
+  }
+
+  const telegramId = match[1];
+  const dias = parseInt(match[2]);
+  const expira = Date.now() + dias * 86400000;
+
+  db.run(
+    `
+    UPDATE users 
+    SET plano = 'pago', expira_em = ?
+    WHERE telegram_id = ?
+    `,
+    [expira, telegramId]
+  );
+
+  bot.sendMessage(
+    msg.chat.id,
+    `✅ Plano PAGO ativado para ${telegramId}\n⏳ Duração: ${dias} dias`
+  );
+});
+
+// ===== MENSAGEM NORMAL =====
 bot.on("message", (msg) => {
-  // ignora mensagens sem texto (sticker, áudio, etc)
-  if (!msg.text) return;
+  if (!msg.text || msg.text.startsWith("/")) return;
 
-  // ignora comandos
-  if (msg.text.startsWith("/")) return;
-
-  const chatId = msg.chat.id;
-  const telegramId = msg.from.id;
-
-  getUser(telegramId, (user) => {
+  getUser(msg.from.id, (user) => {
     if (!user) {
-      criarUsuarioDemo(telegramId);
-      return bot.sendMessage(
-        chatId,
-        "👋 Bem-vindo!\nUse /start para iniciar o bot."
-      );
+      criarUsuarioDemo(msg.from.id);
+      return bot.sendMessage(msg.chat.id, "Use /start para iniciar.");
     }
 
     if (!podeUsarBot(user)) {
       return bot.sendMessage(
-        chatId,
-        "⛔ *Limite diário atingido*\n\n📌 Plano DEMO permite 1 entrada por dia.\n🔓 Adquira o plano pago.",
-        { parse_mode: "Markdown" }
+        msg.chat.id,
+        "⛔ Limite do plano atingido.\n🔓 Adquira o plano pago."
       );
     }
 
     registrarEntrada(user);
 
     bot.sendMessage(
-      chatId,
+      msg.chat.id,
       "📊 *Análise enviada com sucesso!*",
       { parse_mode: "Markdown" }
     );
   });
 });
 
-console.log("🤖 Bot iniciado");
-
-// === EXPRESS (Railway mantém online) ===
+// === EXPRESS ===
 app.get("/", (req, res) => {
   res.send("🚀 Auto Analista Bac Bo rodando!");
 });
