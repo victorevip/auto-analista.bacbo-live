@@ -96,7 +96,7 @@ function emojiParaLetra(e) {
   return null;
 }
 
-// ===== ESTRATÉGIA =====
+// ===== ESTRATÉGIA (POUP WebSim) =====
 function analisarPOUP(H) {
   if (H.length < 10) return null;
 
@@ -110,8 +110,11 @@ function analisarPOUP(H) {
   }
 
   const total = score.P + score.B + score.E;
+
+  // filtro de empate
   if (score.E / total > 0.2) return "NO_BET";
 
+  // streak
   let last = w[w.length - 1];
   let streak = 1;
   for (let i = w.length - 2; i >= 0; i--) {
@@ -120,6 +123,7 @@ function analisarPOUP(H) {
   }
 
   if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
+
   if (score.P / total > 0.6) return "🔵 AZUL";
   if (score.B / total > 0.6) return "🔴 VERMELHO";
 
@@ -202,7 +206,6 @@ bot.on("message", (msg) => {
     );
   }
 
-  // 🚨 OPORTUNIDADE REAL → CONSOME ENTRADA
   getUser(id, (user) => consumirEntrada(user));
   emAnalise[id] = false;
 
@@ -215,7 +218,7 @@ bot.on("message", (msg) => {
   );
 });
 
-// ===== PIX (PLANO ÚNICO) =====
+// ===== PIX =====
 bot.onText(/\/pix$/, async (msg) => {
   try {
     const pagamento = await mercadopago.payment.create({
