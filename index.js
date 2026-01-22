@@ -1,5 +1,6 @@
 import express from "express";
 import TelegramBot from "node-telegram-bot-api";
+import mercadopago from "mercadopago";
 import { db } from "./database.js";
 
 console.log("🚀 Iniciando aplicação...");
@@ -9,16 +10,28 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// ===== TOKEN =====
 const TOKEN =
   process.env.BOT_TOKEN ||
   process.env.TELEGRAM_TOKEN ||
   process.env.AUTO_BACBO_TOKEN;
 
 if (!TOKEN) {
-  console.error("❌ Nenhum token do Telegram definido");
+  console.error("❌ Token não definido");
   process.exit(1);
 }
 
+// ===== MERCADO PAGO =====
+if (!process.env.MP_ACCESS_TOKEN) {
+  console.error("❌ MP_ACCESS_TOKEN não definido");
+  process.exit(1);
+}
+
+mercadopago.configure({
+  access_token: process.env.MP_ACCESS_TOKEN,
+});
+
+// ===== BOT =====
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 // ===== ESTADO =====
@@ -69,7 +82,7 @@ function consumirEntrada(user) {
   );
 }
 
-// ===== MENU PADRÃO =====
+// ===== MENU =====
 function enviarMenu(chatId) {
   bot.sendMessage(chatId, "📌 *Menu principal*", {
     parse_mode: "Markdown",
@@ -83,159 +96,112 @@ function enviarMenu(chatId) {
   });
 }
 
-// ===== EMOJI =====
-function emojiParaLetra(e) {
-  if (e === "🔵") return "P";
-  if (e === "🔴") return "B";
-  if (e === "🟠") return "E";
-  return null;
-}
-
-// ===== ESTRATÉGIA =====
-function analisarPOUP(H) {
-  if (H.length < 10) return null;
-
-  const w = H.slice(-10);
-  let score = { P: 0, B: 0, E: 0 };
-  let peso = 1;
-
-  for (let i = w.length - 1; i >= 0; i--) {
-    score[w[i]] += peso;
-    peso += 0.2;
-  }
-
-  const total = score.P + score.B + score.E;
-  if (score.E / total > 0.2) return "NO_BET";
-
-  let last = w[w.length - 1];
-  let streak = 1;
-  for (let i = w.length - 2; i >= 0; i--) {
-    if (w[i] === last) streak++;
-    else break;
-  }
-
-  if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
-  if (score.P / total > 0.6) return "🔵 AZUL";
-  if (score.B / total > 0.6) return "🔴 VERMELHO";
-
-  return "NO_BET";
-}
-
 // ===== START =====
 bot.onText(/\/start/, (msg) => {
   criarUsuarioDemo(msg.from.id);
   emAnalise[msg.from.id] = false;
   historico[msg.from.id] = [];
-
   enviarMenu(msg.chat.id);
 });
 
-// ===== ANALISAR =====
-bot.onText(/\/analisar/, (msg) => {
+// ===== STATUS =====
+bot.onText(/\/status/, (msg) => {
   getUser(msg.from.id, (user) => {
-    if (!user || !podeUsarBot(user)) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "⛔ Teste esgotado\n/pix 30\n/pix 90\n/pix 365"
-      );
+    if (!user) return bot.sendMessage(msg.chat.id, "Use /start primeiro.");
+
+    let texto = `📊 *STATUS*\n\nPlano: ${user.plano.toUpperCase()}`;
+
+    if (user.plano === "demo") {
+      texto += `\nEntradas hoje: ${user.entradas_hoje}/1`;
     }
 
-    emAnalise[msg.from.id] = true;
-    historico[msg.from.id] = [];
+    if (user.plano === "pago") {
+      texto += `\nExpira em: ${new Date(user.expira_em).toLocaleDateString()}`;
+    }
 
-    bot.sendMessage(msg.chat.id, "📥 Envie os resultados:\n🔵 🔴 🟠");
+    bot.sendMessage(msg.chat.id, texto, { parse_mode: "Markdown" });
   });
 });
 
-// ===== RECEBE EMOJIS =====
-bot.on("message", (msg) => {
-  if (!msg.text || msg.text.startsWith("/")) return;
-  const id = msg.from.id;
-  if (!emAnalise[id]) return;
+// ===== PIX =====
+bot.onText(/\/pix (30|90|365)/, async (msg, match) => {
+  const dias = Number(match[1]);
+  const telegramId = msg.from.id;
+  const chatId = msg.chat.id;
 
-  const letras = msg.text
-    .split(/\s+/)
-    .map(emojiParaLetra)
-    .filter(Boolean);
+  const valores = {
+    30: 29.9,
+    90: 79.9,
+    365: 249.9,
+  };
 
-  for (const letra of letras) {
-    historico[id].push(letra);
-    if (historico[id].length > 20) historico[id].shift();
+  try {
+    const pagamento = await mercadopago.payment.create({
+      transaction_amount: valores[dias],
+      description: `Plano Bac Bo ${dias} dias`,
+      payment_method_id: "pix",
+      payer: {
+        email: `user${telegramId}@bot.com`,
+      },
+      metadata: { telegram_id: telegramId, dias },
+    });
 
-    const sinal = analisarPOUP(historico[id]);
+    const pix =
+      pagamento.body.point_of_interaction.transaction_data.qr_code;
 
-    if (sinal && sinal !== "NO_BET") {
-      getUser(id, (u) => consumirEntrada(u));
-      emAnalise[id] = false;
-      aguardandoResultado[id] = true;
+    bot.sendMessage(
+      chatId,
+      `💳 *Pagamento PIX*\n\n📦 Plano: ${dias} dias\n💰 Valor: R$${valores[dias]}\n\n🔑 *PIX Copia e Cola:*\n\`${pix}\`\n\n⏳ Liberação automática após o pagamento.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (e) {
+    console.error(e);
+    bot.sendMessage(chatId, "❌ Erro ao gerar pagamento PIX.");
+  }
+});
 
-      return bot.sendMessage(
-        msg.chat.id,
-        `🚨 *OPORTUNIDADE DETECTADA*\n\n🎯 ${sinal}`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "✅ WIN", callback_data: "WIN" },
-                { text: "❌ LOSS", callback_data: "LOSS" },
-              ],
-            ],
-          },
-        }
+// ===== WEBHOOK =====
+app.post("/webhook", async (req, res) => {
+  try {
+    const paymentId = req.body?.data?.id;
+    if (!paymentId) return res.sendStatus(200);
+
+    const payment = await mercadopago.payment.get(paymentId);
+
+    if (payment.body.status === "approved") {
+      const { telegram_id, dias } = payment.body.metadata;
+      const expira = Date.now() + dias * 86400000;
+
+      db.run(
+        "UPDATE users SET plano='pago', expira_em=? WHERE telegram_id=?",
+        [expira, telegram_id]
+      );
+
+      bot.sendMessage(
+        telegram_id,
+        `✅ *Pagamento confirmado!*\nPlano ativo por ${dias} dias.`,
+        { parse_mode: "Markdown" }
       );
     }
+
+    res.sendStatus(200);
+  } catch (e) {
+    console.error(e);
+    res.sendStatus(500);
   }
 });
 
-// ===== CALLBACKS =====
+// ===== CALLBACK MENU =====
 bot.on("callback_query", (q) => {
-  const id = q.from.id;
   const chatId = q.message.chat.id;
 
-  if (q.data === "WIN" && aguardandoResultado[id]) {
-    aguardandoResultado[id] = false;
-    aguardandoTipoWin[id] = true;
-
-    return bot.editMessageText("Confirme o resultado:", {
-      chat_id: chatId,
-      message_id: q.message.message_id,
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "🟢 WIN SEM GALE", callback_data: "WIN_SG" },
-            { text: "🟢 WIN NO GALE 1", callback_data: "WIN_G1" },
-          ],
-        ],
-      },
-    });
-  }
-
-  if (q.data === "LOSS" && aguardandoResultado[id]) {
-    aguardandoResultado[id] = false;
-    bot.editMessageText("❌ LOSS registrado.", {
-      chat_id: chatId,
-      message_id: q.message.message_id,
-    });
-    return enviarMenu(chatId);
-  }
-
-  if ((q.data === "WIN_SG" || q.data === "WIN_G1") && aguardandoTipoWin[id]) {
-    aguardandoTipoWin[id] = false;
-    bot.editMessageText("🟢 WIN registrado com sucesso!", {
-      chat_id: chatId,
-      message_id: q.message.message_id,
-    });
-    return enviarMenu(chatId);
-  }
-
-  if (q.data === "MENU_ANALISAR") return bot.sendMessage(chatId, "/analisar");
-  if (q.data === "MENU_STATUS") return bot.sendMessage(chatId, "/status");
+  if (q.data === "MENU_ANALISAR") bot.sendMessage(chatId, "/analisar");
+  if (q.data === "MENU_STATUS") bot.sendMessage(chatId, "/status");
   if (q.data === "MENU_PIX")
-    return bot.sendMessage(chatId, "/pix 30\n/pix 90\n/pix 365");
+    bot.sendMessage(chatId, "/pix 30\n/pix 90\n/pix 365");
 });
 
-// === EXPRESS =====
+// ===== EXPRESS =====
 app.get("/", (_, res) => res.send("🚀 Bot rodando"));
 
 app.listen(PORT, () =>
