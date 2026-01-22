@@ -34,216 +34,170 @@ mercadopago.configure({
 // === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
 
+// ===== ESTADO =====
+const emAnalise = {};
+const historico = {};
+
 // ===== FUNÇÕES =====
 function hoje() {
   return Math.floor(Date.now() / 86400000);
 }
 
-function getUser(telegramId, callback) {
-  db.get(
-    "SELECT * FROM users WHERE telegram_id = ?",
-    [telegramId],
-    (err, row) => callback(row || null)
+function getUser(id, cb) {
+  db.get("SELECT * FROM users WHERE telegram_id = ?", [id], (_, r) =>
+    cb(r || null)
   );
 }
 
-function criarUsuarioDemo(telegramId) {
+function criarUsuarioDemo(id) {
   db.run(
-    `
-    INSERT OR IGNORE INTO users 
-    (telegram_id, plano, criado_em, ultimo_dia)
-    VALUES (?, 'demo', ?, ?)
-    `,
-    [telegramId, Date.now(), hoje()]
+    `INSERT OR IGNORE INTO users 
+     (telegram_id, plano, criado_em, ultimo_dia, entradas_hoje)
+     VALUES (?, 'demo', ?, ?, 0)`,
+    [id, Date.now(), hoje()]
   );
 }
 
 function podeUsarBot(user) {
   if (!user) return false;
 
-  if (user.plano === "pago") {
-    return Date.now() < user.expira_em;
+  if (user.plano === "pago") return Date.now() < user.expira_em;
+
+  const dia = hoje();
+  if (user.ultimo_dia !== dia) {
+    db.run(
+      "UPDATE users SET entradas_hoje=0, ultimo_dia=? WHERE telegram_id=?",
+      [dia, user.telegram_id]
+    );
+    return true;
   }
 
-  if (user.plano === "demo") {
-    const diaAtual = hoje();
-
-    if (user.ultimo_dia !== diaAtual) {
-      db.run(
-        "UPDATE users SET entradas_hoje = 0, ultimo_dia = ? WHERE telegram_id = ?",
-        [diaAtual, user.telegram_id]
-      );
-      return true;
-    }
-
-    return user.entradas_hoje < 1;
-  }
-
-  return false;
+  return user.entradas_hoje < 1;
 }
 
-function registrarEntrada(user) {
+function consumirEntrada(user) {
   db.run(
-    "UPDATE users SET entradas_hoje = entradas_hoje + 1 WHERE telegram_id = ?",
+    "UPDATE users SET entradas_hoje = entradas_hoje + 1 WHERE telegram_id=?",
     [user.telegram_id]
   );
 }
 
-// ===== COMANDOS =====
+// ===== EMOJI =====
+function emojiParaLetra(e) {
+  if (e === "🔵") return "P";
+  if (e === "🔴") return "B";
+  if (e === "🟠") return "E";
+  return null;
+}
+
+// ===== ESTRATÉGIA POUP =====
+function analisarPOUP(H) {
+  if (H.length < 10) return null;
+
+  const w = H.slice(-10);
+  let score = { P: 0, B: 0, E: 0 };
+  let peso = 1;
+
+  for (let i = w.length - 1; i >= 0; i--) {
+    score[w[i]] += peso;
+    peso += 0.2;
+  }
+
+  const total = score.P + score.B + score.E;
+  const pP = score.P / total;
+  const pB = score.B / total;
+  const pE = score.E / total;
+
+  if (pE > 0.2) return "NO_BET";
+
+  let last = w[w.length - 1];
+  let streak = 1;
+  for (let i = w.length - 2; i >= 0; i--) {
+    if (w[i] === last) streak++;
+    else break;
+  }
+
+  if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
+
+  if (pP > 0.6) return "🔵 AZUL";
+  if (pB > 0.6) return "🔴 VERMELHO";
+
+  return "NO_BET";
+}
+
+// ===== START =====
 bot.onText(/\/start/, (msg) => {
   criarUsuarioDemo(msg.from.id);
+  emAnalise[msg.from.id] = false;
+  historico[msg.from.id] = [];
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia\n\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
+    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 teste por dia\n\n▶️ Use /analisar para iniciar\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
     { parse_mode: "Markdown" }
   );
 });
 
-// 🧾 STATUS
-bot.onText(/\/status/, (msg) => {
+// ===== ANALISAR =====
+bot.onText(/\/analisar/, (msg) => {
   getUser(msg.from.id, (user) => {
-    if (!user) return bot.sendMessage(msg.chat.id, "Use /start primeiro.");
-
-    let texto = `🧾 *STATUS*\nPlano: ${user.plano.toUpperCase()}`;
-
-    if (user.plano === "demo") {
-      texto += `\nEntradas hoje: ${user.entradas_hoje}/1`;
-    }
-
-    if (user.plano === "pago") {
-      texto += `\nExpira em: ${new Date(user.expira_em).toLocaleDateString()}`;
-    }
-
-    bot.sendMessage(msg.chat.id, texto, { parse_mode: "Markdown" });
-  });
-});
-
-// 💸 PIX COM PLANOS (30 / 90 / 365)
-bot.onText(/\/pix (30|90|365)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const telegramId = msg.from.id;
-  const dias = parseInt(match[1]);
-
-  const precos = {
-    30: 29.9,
-    90: 79.9,
-    365: 249.9,
-  };
-
-  try {
-    const pagamento = await mercadopago.payment.create({
-      transaction_amount: precos[dias],
-      description: `Plano PAGO - ${dias} dias`,
-      payment_method_id: "pix",
-      payer: {
-        email: `user${telegramId}@bot.com`,
-      },
-      metadata: {
-        telegram_id: telegramId,
-        dias,
-      },
-    });
-
-    const qr =
-      pagamento.body.point_of_interaction.transaction_data.qr_code;
-
-    bot.sendMessage(
-      chatId,
-      `💸 *Pagamento PIX*\n\n📦 Plano: ${dias} dias\n💰 Valor: R$${precos[dias]}\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\n✅ Liberação automática após o pagamento.`,
-      { parse_mode: "Markdown" }
-    );
-  } catch (err) {
-    console.error(err);
-    bot.sendMessage(chatId, "❌ Erro ao gerar PIX.");
-  }
-});
-
-// ===== WEBHOOK MERCADO PAGO (CORRIGIDO) =====
-app.post("/webhook", async (req, res) => {
-  try {
-    const paymentId = req.body?.data?.id;
-    if (!paymentId) return res.sendStatus(200);
-
-    const payment = await mercadopago.payment.get(paymentId);
-
-    if (payment.body.status === "approved") {
-      const telegramId = payment.body.metadata.telegram_id;
-      const dias = payment.body.metadata.dias || 30;
-
-      getUser(telegramId, (user) => {
-        if (user && user.plano === "pago" && user.expira_em > Date.now()) {
-          return; // já ativo → ignora duplicação
-        }
-
-        const expira = Date.now() + dias * 86400000;
-
-        db.run(
-          `
-          UPDATE users 
-          SET plano = 'pago', expira_em = ?
-          WHERE telegram_id = ?
-          `,
-          [expira, telegramId]
-        );
-
-        bot.sendMessage(
-          telegramId,
-          `✅ *Pagamento confirmado!*\n\n🔓 Plano ativado por ${dias} dias.`,
-          { parse_mode: "Markdown" }
-        );
-      });
-    }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("Erro no webhook:", err);
-    res.sendStatus(500);
-  }
-});
-
-// ===== BLOQUEIO =====
-bot.on("message", (msg) => {
-  if (!msg.text) return;
-
-  const chatId = msg.chat.id;
-  const telegramId = msg.from.id;
-
-  if (
-    msg.text.startsWith("/start") ||
-    msg.text.startsWith("/status") ||
-    msg.text.startsWith("/pix")
-  ) {
-    return;
-  }
-
-  getUser(telegramId, (user) => {
-    if (!user) {
-      criarUsuarioDemo(telegramId);
-      return bot.sendMessage(chatId, "Use /start para iniciar.");
-    }
-
-    if (!podeUsarBot(user)) {
+    if (!user || !podeUsarBot(user)) {
       return bot.sendMessage(
-        chatId,
-        "⛔ *Acesso bloqueado*\n\n💳 Planos disponíveis:\n/pix 30\n/pix 90\n/pix 365",
+        msg.chat.id,
+        "⛔ Teste esgotado.\n\n💳 Adquira um plano:\n/pix 30\n/pix 90\n/pix 365",
         { parse_mode: "Markdown" }
       );
     }
 
-    registrarEntrada(user);
+    emAnalise[msg.from.id] = true;
+    historico[msg.from.id] = [];
 
-    bot.sendMessage(chatId, "📊 *Análise enviada!*", {
-      parse_mode: "Markdown",
-    });
+    bot.sendMessage(
+      msg.chat.id,
+      "📥 *Análise iniciada*\nEnvie os resultados:\n🔵 🔴 🟠",
+      { parse_mode: "Markdown" }
+    );
   });
 });
 
-// === EXPRESS ===
-app.get("/", (req, res) => {
-  res.send("🚀 Auto Analista Bac Bo rodando!");
+// ===== RECEBE EMOJIS =====
+bot.on("message", (msg) => {
+  if (!msg.text) return;
+  if (msg.text.startsWith("/")) return;
+
+  const id = msg.from.id;
+  if (!emAnalise[id]) return;
+
+  const letra = emojiParaLetra(msg.text.trim());
+  if (!letra) return;
+
+  historico[id].push(letra);
+  if (historico[id].length > 20) historico[id].shift();
+
+  const sinal = analisarPOUP(historico[id]);
+
+  if (!sinal) {
+    return bot.sendMessage(
+      msg.chat.id,
+      `📊 Histórico: ${historico[id].join(" ")}\n⏳ Aguardando dados...`
+    );
+  }
+
+  if (sinal !== "NO_BET") {
+    getUser(id, (user) => consumirEntrada(user));
+    emAnalise[id] = false;
+  }
+
+  bot.sendMessage(
+    msg.chat.id,
+    `📊 Histórico: ${historico[id].join(" ")}\n\n🎯 *SINAL*\n${sinal}`,
+    { parse_mode: "Markdown" }
+  );
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Servidor rodando na porta ${PORT}`);
-});
+// === EXPRESS ===
+app.get("/", (_, res) => res.send("🚀 Auto Analista Bac Bo rodando!"));
+
+app.listen(PORT, () =>
+  console.log(`✅ Servidor rodando na porta ${PORT}`)
+);
