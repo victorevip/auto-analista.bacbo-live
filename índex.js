@@ -16,27 +16,18 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-bot.onText(/\/start/, (msg) => {
+bot.on("message", (msg) => {
   const chatId = msg.chat.id;
 
-  const agora = Date.now();
-
   db.run(
-    `
-    INSERT INTO users (telegram_id, criado_em)
-    VALUES (?, ?)
-    ON CONFLICT(telegram_id) DO NOTHING
-  `,
-    [chatId.toString(), agora]
+    `INSERT OR IGNORE INTO users (telegram_id, plano, criado_em)
+     VALUES (?, ?, ?)`,
+    [chatId.toString(), "demo", Date.now()]
   );
 
-  bot.sendMessage(
-    chatId,
-    "🤖 Bot online com sucesso!\n\n🎯 Plano DEMO: 1 entrada por dia"
-  );
+  bot.sendMessage(chatId, "🤖 Bot online com sucesso!");
 });
 
 // === EXPRESS (Railway exige isso) ===
