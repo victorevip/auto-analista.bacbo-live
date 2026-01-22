@@ -48,7 +48,7 @@ function criarUsuarioDemo(telegramId) {
   );
 }
 
-/* 🔁 FUNÇÃO FINAL */
+// 🔁 FUNÇÃO FINAL
 function podeUsarBot(user) {
   if (!user) return false;
 
@@ -94,7 +94,7 @@ bot.onText(/\/start/, (msg) => {
   );
 });
 
-/* 🧾 STATUS */
+// 🧾 STATUS
 bot.onText(/\/status/, (msg) => {
   getUser(msg.from.id, (user) => {
     if (!user) return bot.sendMessage(msg.chat.id, "Use /start primeiro.");
@@ -113,7 +113,7 @@ bot.onText(/\/status/, (msg) => {
   });
 });
 
-/* 🔐 ADMIN - ATIVAR PLANO */
+// 🔐 ADMIN - ATIVAR PLANO PAGO
 bot.onText(/\/ativar (\d+) (\d+)/, (msg, match) => {
   if (msg.from.id !== ADMIN_ID) {
     return bot.sendMessage(msg.chat.id, "⛔ Acesso negado");
@@ -148,8 +148,13 @@ bot.on("message", (msg) => {
   // libera admin
   if (telegramId === ADMIN_ID) return;
 
-  // libera /start e /status
-  if (msg.text.startsWith("/start") || msg.text.startsWith("/status")) return;
+  // libera comandos permitidos
+  if (
+    msg.text.startsWith("/start") ||
+    msg.text.startsWith("/status")
+  ) {
+    return;
+  }
 
   getUser(telegramId, (user) => {
     if (!user) {
@@ -160,7 +165,7 @@ bot.on("message", (msg) => {
     if (!podeUsarBot(user)) {
       return bot.sendMessage(
         chatId,
-        "⛔ *Acesso bloqueado*\n\n📌 Plano DEMO: 1 entrada/dia\n🔓 Adquira o plano pago.",
+        "⛔ *Acesso bloqueado*\n\n📌 Plano DEMO: 1 entrada por dia\n🔓 Adquira o plano pago.",
         { parse_mode: "Markdown" }
       );
     }
