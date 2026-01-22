@@ -21,14 +21,22 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+// === MERCADO PAGO ===
+if (!process.env.MP_ACCESS_TOKEN) {
+  console.error("❌ MP_ACCESS_TOKEN não definido");
+  process.exit(1);
+}
+
+mercadopago.configure({
+  access_token: process.env.MP_ACCESS_TOKEN,
+});
+
 // === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 // ===== ESTADO =====
 const emAnalise = {};
 const historico = {};
-const aguardandoResultado = {}; // 👈 NOVO
-const aguardandoTipoWin = {};   // 👈 NOVO
 
 // ===== FUNÇÕES =====
 function hoje() {
@@ -52,7 +60,10 @@ function criarUsuarioDemo(id) {
 
 function podeUsarBot(user) {
   if (!user) return false;
-  if (user.plano === "pago") return Date.now() < user.expira_em;
+
+  if (user.plano === "pago") {
+    return Date.now() < user.expira_em;
+  }
 
   const dia = hoje();
   if (user.ultimo_dia !== dia) {
@@ -62,6 +73,7 @@ function podeUsarBot(user) {
     );
     return true;
   }
+
   return user.entradas_hoje < 1;
 }
 
@@ -80,7 +92,7 @@ function emojiParaLetra(e) {
   return null;
 }
 
-// ===== ESTRATÉGIA =====
+// ===== ESTRATÉGIA POUP =====
 function analisarPOUP(H) {
   if (H.length < 10) return null;
 
@@ -94,7 +106,11 @@ function analisarPOUP(H) {
   }
 
   const total = score.P + score.B + score.E;
-  if (score.E / total > 0.2) return "NO_BET";
+  const pP = score.P / total;
+  const pB = score.B / total;
+  const pE = score.E / total;
+
+  if (pE > 0.2) return "NO_BET";
 
   let last = w[w.length - 1];
   let streak = 1;
@@ -103,9 +119,12 @@ function analisarPOUP(H) {
     else break;
   }
 
-  if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
-  if (score.P / total > 0.6) return "🔵 AZUL";
-  if (score.B / total > 0.6) return "🔴 VERMELHO";
+  if (streak >= 3) {
+    return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
+  }
+
+  if (pP > 0.6) return "🔵 AZUL";
+  if (pB > 0.6) return "🔴 VERMELHO";
 
   return "NO_BET";
 }
@@ -118,7 +137,7 @@ bot.onText(/\/start/, (msg) => {
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n▶️ Use /analisar para iniciar",
+    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 teste grátis por dia\n\n▶️ Use /analisar para iniciar\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
     { parse_mode: "Markdown" }
   );
 });
@@ -129,7 +148,8 @@ bot.onText(/\/analisar/, (msg) => {
     if (!user || !podeUsarBot(user)) {
       return bot.sendMessage(
         msg.chat.id,
-        "⛔ Teste esgotado\n/pix 30\n/pix 90\n/pix 365"
+        "⛔ *Teste grátis esgotado*\n\n💳 Adquira um plano:\n/pix 30\n/pix 90\n/pix 365",
+        { parse_mode: "Markdown" }
       );
     }
 
@@ -138,104 +158,59 @@ bot.onText(/\/analisar/, (msg) => {
 
     bot.sendMessage(
       msg.chat.id,
-      "📥 Envie os resultados:\n🔵 🔴 🟠"
+      "📥 *Análise iniciada*\nEnvie os resultados:\n🔵 🔴 🟠",
+      { parse_mode: "Markdown" }
     );
   });
 });
 
 // ===== RECEBE EMOJIS =====
 bot.on("message", (msg) => {
-  if (!msg.text || msg.text.startsWith("/")) return;
+  if (!msg.text) return;
+  if (msg.text.startsWith("/")) return;
 
   const id = msg.from.id;
   if (!emAnalise[id]) return;
 
-  const letras = msg.text
-    .split(/\s+/)
-    .map(emojiParaLetra)
-    .filter(Boolean);
+  const letra = emojiParaLetra(msg.text.trim());
+  if (!letra) return;
 
-  for (const letra of letras) {
-    historico[id].push(letra);
-    if (historico[id].length > 20) historico[id].shift();
+  historico[id].push(letra);
+  if (historico[id].length > 20) historico[id].shift();
 
-    const sinal = analisarPOUP(historico[id]);
+  const sinal = analisarPOUP(historico[id]);
 
-    if (sinal && sinal !== "NO_BET") {
-      getUser(id, (u) => consumirEntrada(u));
-      emAnalise[id] = false;
-      aguardandoResultado[id] = true;
-
-      return bot.sendMessage(
-        msg.chat.id,
-        `🚨 *OPORTUNIDADE DETECTADA* 🚨\n\n📊 Histórico:\n${historico[id].join(
-          " "
-        )}\n\n🎯 *ENTRADA CONFIRMADA:*\n${sinal}\n\n⏱ FAZER ATÉ G1`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "✅ WIN", callback_data: "WIN" },
-                { text: "❌ LOSS", callback_data: "LOSS" },
-              ],
-            ],
-          },
-        }
-      );
-    }
-  }
-});
-
-// ===== CALLBACKS =====
-bot.on("callback_query", (q) => {
-  const id = q.from.id;
-
-  if (q.data === "WIN" && aguardandoResultado[id]) {
-    aguardandoResultado[id] = false;
-    aguardandoTipoWin[id] = true;
-
-    return bot.editMessageText(
-      "Confirme o resultado:",
-      {
-        chat_id: q.message.chat.id,
-        message_id: q.message.message_id,
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "🟢 WIN SEM GALE", callback_data: "WIN_SG" },
-              { text: "🟢 WIN NO GALE 1", callback_data: "WIN_G1" },
-            ],
-          ],
-        },
-      }
+  if (!sinal) {
+    return bot.sendMessage(
+      msg.chat.id,
+      `📊 Histórico:\n${historico[id].join(" ")}\n\n⏳ Aguardando dados suficientes...`
     );
   }
 
-  if (q.data === "LOSS" && aguardandoResultado[id]) {
-    aguardandoResultado[id] = false;
-    return bot.editMessageText("❌ LOSS registrado.", {
-      chat_id: q.message.chat.id,
-      message_id: q.message.message_id,
-    });
-  }
-
-  if ((q.data === "WIN_SG" || q.data === "WIN_G1") && aguardandoTipoWin[id]) {
-    aguardandoTipoWin[id] = false;
-    return bot.editMessageText(
-      q.data === "WIN_SG"
-        ? "🟢 WIN SEM GALE registrado!"
-        : "🟢 WIN NO GALE 1 registrado!",
-      {
-        chat_id: q.message.chat.id,
-        message_id: q.message.message_id,
-      }
+  if (sinal === "NO_BET") {
+    return bot.sendMessage(
+      msg.chat.id,
+      `📊 Histórico:\n${historico[id].join(
+        " "
+      )}\n\n⚪ NO BET — aguardando oportunidade...`
     );
   }
+
+  // 🚨 OPORTUNIDADE REAL → CONSOME TESTE
+  getUser(id, (user) => consumirEntrada(user));
+  emAnalise[id] = false;
+
+  bot.sendMessage(
+    msg.chat.id,
+    `🚨 *OPORTUNIDADE DETECTADA* 🚨\n\n📊 Histórico:\n${historico[id].join(
+      " "
+    )}\n\n🎯 *ENTRADA CONFIRMADA:*\n${sinal}\n\n⏰ Aja na próxima rodada!`,
+    { parse_mode: "Markdown" }
+  );
 });
 
 // === EXPRESS ===
-app.get("/", (_, res) => res.send("🚀 Bot rodando"));
+app.get("/", (_, res) => res.send("🚀 Auto Analista Bac Bo rodando!"));
 
 app.listen(PORT, () =>
   console.log(`✅ Servidor rodando na porta ${PORT}`)
