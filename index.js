@@ -6,6 +6,8 @@ import { db } from "./database.js";
 console.log("🚀 Iniciando aplicação...");
 
 const app = express();
+app.use(express.json());
+
 const PORT = process.env.PORT || 3000;
 
 // === TELEGRAM TOKEN ===
@@ -134,16 +136,17 @@ bot.onText(/\/pix/, async (msg) => {
       payer: {
         email: `user${telegramId}@bot.com`,
       },
+      metadata: {
+        telegram_id: telegramId,
+      },
     });
 
     const qr =
       pagamento.body.point_of_interaction.transaction_data.qr_code;
-    const copiaCola =
-      pagamento.body.point_of_interaction.transaction_data.qr_code_base64;
 
     bot.sendMessage(
       chatId,
-      `💸 *Pagamento PIX*\n\n📌 Valor: R$29,90\n⏳ Plano de 30 dias\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\nApós o pagamento, o acesso será liberado.`,
+      `💸 *Pagamento PIX*\n\n📌 Valor: R$29,90\n⏳ Plano de 30 dias\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\n✅ O acesso será liberado automaticamente após o pagamento.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -152,29 +155,39 @@ bot.onText(/\/pix/, async (msg) => {
   }
 });
 
-// 🔐 ADMIN - ATIVAR PLANO
-bot.onText(/\/ativar (\d+) (\d+)/, (msg, match) => {
-  if (msg.from.id !== ADMIN_ID) {
-    return bot.sendMessage(msg.chat.id, "⛔ Acesso negado");
+// ===== WEBHOOK MERCADO PAGO =====
+app.post("/webhook", async (req, res) => {
+  try {
+    const paymentId = req.body?.data?.id;
+    if (!paymentId) return res.sendStatus(200);
+
+    const payment = await mercadopago.payment.get(paymentId);
+
+    if (payment.body.status === "approved") {
+      const telegramId = payment.body.metadata.telegram_id;
+      const expira = Date.now() + 30 * 86400000;
+
+      db.run(
+        `
+        UPDATE users 
+        SET plano = 'pago', expira_em = ?
+        WHERE telegram_id = ?
+        `,
+        [expira, telegramId]
+      );
+
+      bot.sendMessage(
+        telegramId,
+        "✅ *Pagamento confirmado!*\n\n🔓 Plano PAGO ativado por 30 dias.",
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Webhook erro:", err);
+    res.sendStatus(500);
   }
-
-  const telegramId = match[1];
-  const dias = parseInt(match[2]);
-  const expira = Date.now() + dias * 86400000;
-
-  db.run(
-    `
-    UPDATE users 
-    SET plano = 'pago', expira_em = ?
-    WHERE telegram_id = ?
-    `,
-    [expira, telegramId]
-  );
-
-  bot.sendMessage(
-    msg.chat.id,
-    `✅ Plano PAGO ativado\n👤 Usuário: ${telegramId}\n⏳ ${dias} dias`
-  );
 });
 
 // ===== BLOQUEIO TOTAL =====
