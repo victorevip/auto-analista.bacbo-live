@@ -34,9 +34,6 @@ mercadopago.configure({
 // === BOT ===
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// === ADMIN ===
-const ADMIN_ID = 8429920060;
-
 // ===== FUNÇÕES =====
 function hoje() {
   return Math.floor(Date.now() / 86400000);
@@ -65,7 +62,6 @@ function podeUsarBot(user) {
   if (!user) return false;
 
   if (user.plano === "pago") {
-    if (!user.expira_em) return true;
     return Date.now() < user.expira_em;
   }
 
@@ -99,7 +95,7 @@ bot.onText(/\/start/, (msg) => {
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia\n\n💳 Para plano pago use /pix",
+    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 entrada por dia\n\n💳 Planos:\n/pix 30\n/pix 90\n/pix 365",
     { parse_mode: "Markdown" }
   );
 });
@@ -115,7 +111,7 @@ bot.onText(/\/status/, (msg) => {
       texto += `\nEntradas hoje: ${user.entradas_hoje}/1`;
     }
 
-    if (user.plano === "pago" && user.expira_em) {
+    if (user.plano === "pago") {
       texto += `\nExpira em: ${new Date(user.expira_em).toLocaleDateString()}`;
     }
 
@@ -123,21 +119,29 @@ bot.onText(/\/status/, (msg) => {
   });
 });
 
-// 💸 PIX — GERAR PAGAMENTO
-bot.onText(/\/pix/, async (msg) => {
+// 💸 PIX COM PLANOS (30 / 90 / 365)
+bot.onText(/\/pix (30|90|365)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const telegramId = msg.from.id;
+  const dias = parseInt(match[1]);
+
+  const precos = {
+    30: 29.9,
+    90: 79.9,
+    365: 249.9,
+  };
 
   try {
     const pagamento = await mercadopago.payment.create({
-      transaction_amount: 29.9,
-      description: "Plano PAGO - Auto Analista Bac Bo (30 dias)",
+      transaction_amount: precos[dias],
+      description: `Plano PAGO - ${dias} dias`,
       payment_method_id: "pix",
       payer: {
         email: `user${telegramId}@bot.com`,
       },
       metadata: {
         telegram_id: telegramId,
+        dias,
       },
     });
 
@@ -146,16 +150,16 @@ bot.onText(/\/pix/, async (msg) => {
 
     bot.sendMessage(
       chatId,
-      `💸 *Pagamento PIX*\n\n📌 Valor: R$29,90\n⏳ Plano de 30 dias\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\n✅ O acesso será liberado automaticamente após o pagamento.`,
+      `💸 *Pagamento PIX*\n\n📦 Plano: ${dias} dias\n💰 Valor: R$${precos[dias]}\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\n✅ Liberação automática após o pagamento.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
     console.error(err);
-    bot.sendMessage(chatId, "❌ Erro ao gerar PIX. Tente novamente.");
+    bot.sendMessage(chatId, "❌ Erro ao gerar PIX.");
   }
 });
 
-// ===== WEBHOOK MERCADO PAGO =====
+// ===== WEBHOOK MERCADO PAGO (CORRIGIDO) =====
 app.post("/webhook", async (req, res) => {
   try {
     const paymentId = req.body?.data?.id;
@@ -165,39 +169,45 @@ app.post("/webhook", async (req, res) => {
 
     if (payment.body.status === "approved") {
       const telegramId = payment.body.metadata.telegram_id;
-      const expira = Date.now() + 30 * 86400000;
+      const dias = payment.body.metadata.dias || 30;
 
-      db.run(
-        `
-        UPDATE users 
-        SET plano = 'pago', expira_em = ?
-        WHERE telegram_id = ?
-        `,
-        [expira, telegramId]
-      );
+      getUser(telegramId, (user) => {
+        if (user && user.plano === "pago" && user.expira_em > Date.now()) {
+          return; // já ativo → ignora duplicação
+        }
 
-      bot.sendMessage(
-        telegramId,
-        "✅ *Pagamento confirmado!*\n\n🔓 Plano PAGO ativado por 30 dias.",
-        { parse_mode: "Markdown" }
-      );
+        const expira = Date.now() + dias * 86400000;
+
+        db.run(
+          `
+          UPDATE users 
+          SET plano = 'pago', expira_em = ?
+          WHERE telegram_id = ?
+          `,
+          [expira, telegramId]
+        );
+
+        bot.sendMessage(
+          telegramId,
+          `✅ *Pagamento confirmado!*\n\n🔓 Plano ativado por ${dias} dias.`,
+          { parse_mode: "Markdown" }
+        );
+      });
     }
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("Webhook erro:", err);
+    console.error("Erro no webhook:", err);
     res.sendStatus(500);
   }
 });
 
-// ===== BLOQUEIO TOTAL =====
+// ===== BLOQUEIO =====
 bot.on("message", (msg) => {
   if (!msg.text) return;
 
   const chatId = msg.chat.id;
   const telegramId = msg.from.id;
-
-  if (telegramId === ADMIN_ID) return;
 
   if (
     msg.text.startsWith("/start") ||
@@ -216,18 +226,16 @@ bot.on("message", (msg) => {
     if (!podeUsarBot(user)) {
       return bot.sendMessage(
         chatId,
-        "⛔ *Acesso bloqueado*\n\n📌 Plano DEMO: 1 entrada/dia\n💳 Use /pix para liberar acesso",
+        "⛔ *Acesso bloqueado*\n\n💳 Planos disponíveis:\n/pix 30\n/pix 90\n/pix 365",
         { parse_mode: "Markdown" }
       );
     }
 
     registrarEntrada(user);
 
-    bot.sendMessage(
-      chatId,
-      "📊 *Análise enviada com sucesso!*",
-      { parse_mode: "Markdown" }
-    );
+    bot.sendMessage(chatId, "📊 *Análise enviada!*", {
+      parse_mode: "Markdown",
+    });
   });
 });
 
