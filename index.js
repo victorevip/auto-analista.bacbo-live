@@ -138,7 +138,7 @@ bot.onText(/\/start/, (msg) => {
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n⏱️ Teste liberado por 24 horas\n\n▶️ Use /analisar\n💳 Plano mensal:\n/pix",
+    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 teste grátis por dia\n\n▶️ Use /analisar\n💳 Plano mensal:\n/pix",
     { parse_mode: "Markdown" }
   );
 });
