@@ -10,6 +10,9 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// === ADMIN ID ===
+const ADMIN_ID = 8429920060;
+
 // === TELEGRAM TOKEN ===
 const TOKEN =
   process.env.BOT_TOKEN ||
@@ -43,6 +46,10 @@ function hoje() {
   return Math.floor(Date.now() / 86400000);
 }
 
+function isAdmin(msg) {
+  return msg.from.id === ADMIN_ID;
+}
+
 function getUser(id, cb) {
   db.get(
     "SELECT * FROM users WHERE telegram_id = ?",
@@ -64,10 +71,7 @@ function criarUsuarioDemo(id) {
 
 function podeUsarBot(user) {
   if (!user) return false;
-
-  if (user.plano === "pago") {
-    return Date.now() < user.expira_em;
-  }
+  if (user.plano === "pago") return Date.now() < user.expira_em;
 
   const dia = hoje();
   if (user.ultimo_dia !== dia) {
@@ -77,7 +81,6 @@ function podeUsarBot(user) {
     );
     return true;
   }
-
   return user.entradas_hoje < 1;
 }
 
@@ -88,185 +91,63 @@ function consumirEntrada(user) {
   );
 }
 
-// ===== EMOJI =====
-function emojiParaLetra(e) {
-  if (e === "🔵") return "P";
-  if (e === "🔴") return "B";
-  if (e === "🟠") return "E";
-  return null;
-}
-
-// ===== ESTRATÉGIA (POUP WebSim) =====
-function analisarPOUP(H) {
-  if (H.length < 10) return null;
-
-  const w = H.slice(-10);
-  let score = { P: 0, B: 0, E: 0 };
-  let peso = 1;
-
-  for (let i = w.length - 1; i >= 0; i--) {
-    score[w[i]] += peso;
-    peso += 0.2;
-  }
-
-  const total = score.P + score.B + score.E;
-
-  // filtro de empate
-  if (score.E / total > 0.2) return "NO_BET";
-
-  // streak
-  let last = w[w.length - 1];
-  let streak = 1;
-  for (let i = w.length - 2; i >= 0; i--) {
-    if (w[i] === last) streak++;
-    else break;
-  }
-
-  if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
-
-  if (score.P / total > 0.6) return "🔵 AZUL";
-  if (score.B / total > 0.6) return "🔴 VERMELHO";
-
-  return "NO_BET";
-}
-
 // ===== START =====
 bot.onText(/\/start/, (msg) => {
+  if (!isAdmin(msg))
+    return bot.sendMessage(msg.chat.id, "⛔ Acesso restrito ao administrador.");
+
   criarUsuarioDemo(msg.from.id);
   emAnalise[msg.from.id] = false;
   historico[msg.from.id] = [];
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🎯 Plano DEMO ativo\n📌 1 teste grátis por dia\n\n▶️ Use /analisar\n💳 Plano mensal:\n/pix",
+    "🤖 *Auto Analista Bac Bo*\n\n🔓 Acesso ADMIN liberado",
     { parse_mode: "Markdown" }
   );
 });
 
 // ===== STATUS =====
 bot.onText(/\/status/, (msg) => {
+  if (!isAdmin(msg))
+    return bot.sendMessage(msg.chat.id, "⛔ Acesso restrito ao administrador.");
+
   getUser(msg.from.id, (user) => {
     if (!user) return;
-
-    let texto = `🧾 *STATUS*\nPlano: ${user.plano.toUpperCase()}`;
-
-    if (user.plano === "demo") {
-      texto += `\nEntradas hoje: ${user.entradas_hoje}/1`;
-    }
-
-    if (user.plano === "pago") {
-      texto += `\nExpira em: ${new Date(user.expira_em).toLocaleDateString()}`;
-    }
-
-    bot.sendMessage(msg.chat.id, texto, { parse_mode: "Markdown" });
+    bot.sendMessage(
+      msg.chat.id,
+      `🧾 *STATUS*\nPlano: ${user.plano.toUpperCase()}`,
+      { parse_mode: "Markdown" }
+    );
   });
 });
 
 // ===== ANALISAR =====
 bot.onText(/\/analisar/, (msg) => {
-  getUser(msg.from.id, (user) => {
-    if (!user || !podeUsarBot(user)) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "⛔ *Teste grátis esgotado*\n\n💳 Plano mensal:\n/pix",
-        { parse_mode: "Markdown" }
-      );
-    }
+  if (!isAdmin(msg))
+    return bot.sendMessage(msg.chat.id, "⛔ Acesso restrito ao administrador.");
 
-    emAnalise[msg.from.id] = true;
-    historico[msg.from.id] = [];
-
-    bot.sendMessage(
-      msg.chat.id,
-      "📥 *Análise iniciada*\nEnvie os resultados:\n🔵 🔴 🟠",
-      { parse_mode: "Markdown" }
-    );
-  });
-});
-
-// ===== RECEBE RESULTADOS =====
-bot.on("message", (msg) => {
-  if (!msg.text || msg.text.startsWith("/")) return;
-
-  const id = msg.from.id;
-  if (!emAnalise[id]) return;
-
-  const letra = emojiParaLetra(msg.text.trim());
-  if (!letra) return;
-
-  historico[id].push(letra);
-  if (historico[id].length > 20) historico[id].shift();
-
-  const sinal = analisarPOUP(historico[id]);
-
-  if (!sinal || sinal === "NO_BET") {
-    return bot.sendMessage(
-      msg.chat.id,
-      `📊 Histórico:\n${historico[id].join(" ")}\n\n⏳ Aguardando oportunidade...`
-    );
-  }
-
-  getUser(id, (user) => consumirEntrada(user));
-  emAnalise[id] = false;
+  emAnalise[msg.from.id] = true;
+  historico[msg.from.id] = [];
 
   bot.sendMessage(
     msg.chat.id,
-    `🚨 *OPORTUNIDADE DETECTADA* 🚨\n\n📊 Histórico:\n${historico[id].join(
-      " "
-    )}\n\n🎯 *ENTRADA CONFIRMADA:*\n${sinal}`,
+    "📥 *Análise iniciada*\nEnvie os resultados:\n🔵 🔴 🟠",
     { parse_mode: "Markdown" }
   );
 });
 
-// ===== PIX =====
-bot.onText(/\/pix$/, async (msg) => {
-  try {
-    const pagamento = await mercadopago.payment.create({
-      transaction_amount: 59.9,
-      description: "Plano Mensal - 30 dias",
-      payment_method_id: "pix",
-      payer: { email: `user${msg.from.id}@bot.com` },
-      metadata: { telegram_id: msg.from.id },
-    });
-
-    const qr =
-      pagamento.body.point_of_interaction.transaction_data.qr_code;
-
-    bot.sendMessage(
-      msg.chat.id,
-      `💸 *Pagamento PIX*\n\n📦 Plano mensal (30 dias)\n💰 Valor: R$ 59,90\n\n🔑 *PIX Copia e Cola:*\n\`${qr}\`\n\n✅ Liberação automática.`,
-      { parse_mode: "Markdown" }
-    );
-  } catch (e) {
-    console.error(e);
-    bot.sendMessage(msg.chat.id, "❌ Erro ao gerar PIX.");
-  }
+// ===== RECEBE RESULTADOS =====
+bot.on("message", (msg) => {
+  if (!isAdmin(msg)) return;
+  if (!msg.text || msg.text.startsWith("/")) return;
+  if (!emAnalise[msg.from.id]) return;
 });
 
-// ===== WEBHOOK =====
-app.post("/webhook", async (req, res) => {
-  const id = req.body?.data?.id;
-  if (!id) return res.sendStatus(200);
-
-  const pagamento = await mercadopago.payment.get(id);
-
-  if (pagamento.body.status === "approved") {
-    const telegram_id = pagamento.body.metadata.telegram_id;
-    const expira = Date.now() + 30 * 86400000;
-
-    db.run(
-      "UPDATE users SET plano='pago', expira_em=? WHERE telegram_id=?",
-      [expira, telegram_id]
-    );
-
-    bot.sendMessage(
-      telegram_id,
-      "✅ *Pagamento confirmado!*\n\n🔓 Plano mensal ativo por 30 dias.",
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  res.sendStatus(200);
+// ===== PIX =====
+bot.onText(/\/pix$/, (msg) => {
+  if (!isAdmin(msg))
+    return bot.sendMessage(msg.chat.id, "⛔ Acesso restrito ao administrador.");
 });
 
 // === EXPRESS ===
