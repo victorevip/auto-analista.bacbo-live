@@ -50,45 +50,43 @@ function isAdmin(msg) {
   return msg.from.id === ADMIN_ID;
 }
 
-function getUser(id, cb) {
-  db.get(
-    "SELECT * FROM users WHERE telegram_id = ?",
-    [id],
-    (_, r) => cb(r || null)
-  );
+function emojiParaLetra(e) {
+  if (e === "🔵") return "P";
+  if (e === "🔴") return "B";
+  if (e === "🟠") return "E";
+  return null;
 }
 
-function criarUsuarioDemo(id) {
-  db.run(
-    `
-    INSERT OR IGNORE INTO users 
-    (telegram_id, plano, criado_em, ultimo_dia, entradas_hoje)
-    VALUES (?, 'demo', ?, ?, 0)
-    `,
-    [id, Date.now(), hoje()]
-  );
-}
+// ===== ESTRATÉGIA (POUP WebSim) =====
+function analisarPOUP(H) {
+  if (H.length < 10) return null;
 
-function podeUsarBot(user) {
-  if (!user) return false;
-  if (user.plano === "pago") return Date.now() < user.expira_em;
+  const w = H.slice(-10);
+  let score = { P: 0, B: 0, E: 0 };
+  let peso = 1;
 
-  const dia = hoje();
-  if (user.ultimo_dia !== dia) {
-    db.run(
-      "UPDATE users SET entradas_hoje = 0, ultimo_dia = ? WHERE telegram_id = ?",
-      [dia, user.telegram_id]
-    );
-    return true;
+  for (let i = w.length - 1; i >= 0; i--) {
+    score[w[i]] += peso;
+    peso += 0.2;
   }
-  return user.entradas_hoje < 1;
-}
 
-function consumirEntrada(user) {
-  db.run(
-    "UPDATE users SET entradas_hoje = entradas_hoje + 1 WHERE telegram_id = ?",
-    [user.telegram_id]
-  );
+  const total = score.P + score.B + score.E;
+
+  if (score.E / total > 0.2) return "NO_BET";
+
+  let last = w[w.length - 1];
+  let streak = 1;
+  for (let i = w.length - 2; i >= 0; i--) {
+    if (w[i] === last) streak++;
+    else break;
+  }
+
+  if (streak >= 3) return last === "P" ? "🔴 VERMELHO" : "🔵 AZUL";
+
+  if (score.P / total > 0.6) return "🔵 AZUL";
+  if (score.B / total > 0.6) return "🔴 VERMELHO";
+
+  return "NO_BET";
 }
 
 // ===== START =====
@@ -96,30 +94,14 @@ bot.onText(/\/start/, (msg) => {
   if (!isAdmin(msg))
     return bot.sendMessage(msg.chat.id, "⛔ Acesso restrito ao administrador.");
 
-  criarUsuarioDemo(msg.from.id);
   emAnalise[msg.from.id] = false;
   historico[msg.from.id] = [];
 
   bot.sendMessage(
     msg.chat.id,
-    "🤖 *Auto Analista Bac Bo*\n\n🔓 Acesso ADMIN liberado",
+    "🤖 *Auto Analista Bac Bo*\n\n🔓 Acesso ADMIN liberado\n▶️ Use /analisar",
     { parse_mode: "Markdown" }
   );
-});
-
-// ===== STATUS =====
-bot.onText(/\/status/, (msg) => {
-  if (!isAdmin(msg))
-    return bot.sendMessage(msg.chat.id, "⛔ Acesso restrito ao administrador.");
-
-  getUser(msg.from.id, (user) => {
-    if (!user) return;
-    bot.sendMessage(
-      msg.chat.id,
-      `🧾 *STATUS*\nPlano: ${user.plano.toUpperCase()}`,
-      { parse_mode: "Markdown" }
-    );
-  });
 });
 
 // ===== ANALISAR =====
@@ -137,17 +119,37 @@ bot.onText(/\/analisar/, (msg) => {
   );
 });
 
-// ===== RECEBE RESULTADOS =====
+// ===== RECEBE RESULTADOS (REATIVADO) =====
 bot.on("message", (msg) => {
   if (!isAdmin(msg)) return;
   if (!msg.text || msg.text.startsWith("/")) return;
   if (!emAnalise[msg.from.id]) return;
-});
 
-// ===== PIX =====
-bot.onText(/\/pix$/, (msg) => {
-  if (!isAdmin(msg))
-    return bot.sendMessage(msg.chat.id, "⛔ Acesso restrito ao administrador.");
+  const letra = emojiParaLetra(msg.text.trim());
+  if (!letra) return;
+
+  historico[msg.from.id].push(letra);
+  if (historico[msg.from.id].length > 20)
+    historico[msg.from.id].shift();
+
+  const sinal = analisarPOUP(historico[msg.from.id]);
+
+  if (!sinal || sinal === "NO_BET") {
+    return bot.sendMessage(
+      msg.chat.id,
+      `📊 Histórico:\n${historico[msg.from.id].join(" ")}\n\n⏳ Aguardando oportunidade...`
+    );
+  }
+
+  emAnalise[msg.from.id] = false;
+
+  bot.sendMessage(
+    msg.chat.id,
+    `🚨 *OPORTUNIDADE DETECTADA* 🚨\n\n📊 Histórico:\n${historico[msg.from.id].join(
+      " "
+    )}\n\n🎯 *ENTRADA CONFIRMADA:*\n${sinal}`,
+    { parse_mode: "Markdown" }
+  );
 });
 
 // === EXPRESS ===
